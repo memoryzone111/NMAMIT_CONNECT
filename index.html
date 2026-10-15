@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101010">
+  <title>NMAMIT CONNECT · Remote</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brandmark">N<span>C</span></div>
+    <div><div class="eyebrow">NMAMIT DIGITAL SIGNAGE</div><h1>CONNECT</h1></div>
+    <span id="connection" class="status">CONNECTING</span>
+  </header>
+  <main>
+    <section class="hero panel">
+      <div class="eyebrow">REMOTE CONTROL</div>
+      <h2>Your display.<br><span>Your control.</span></h2>
+      <p>Upload media and manage the portrait LED playlist from your phone.</p>
+      <div class="device-line"><span class="pulse"></span><span id="displayName">NMAMIT LED</span><span class="muted">· 9:16 DISPLAY</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head"><div><div class="eyebrow">NOW PLAYING</div><h2 id="nowTitle">Waiting for playlist</h2></div><span id="nowType" class="tag">READY</span></div>
+      <div class="transport">
+        <button id="prevBtn" class="icon-btn" aria-label="Previous">Ⅱ‹</button>
+        <button id="playBtn" class="play-btn" aria-label="Play or pause">Ⅱ</button>
+        <button id="nextBtn" class="icon-btn" aria-label="Next">›Ⅱ</button>
+      </div>
+      <div class="loop-row"><span>Playback mode</span>
+        <select id="loopMode"><option value="playlist">Loop playlist</option><option value="one">Loop one item</option><option value="off">Play once</option></select>
+      </div>
+      <p id="notice" class="notice">Connect your Supabase project in config.js to begin.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-head"><div><div class="eyebrow">CONTENT LIBRARY</div><h2>Playlist <span id="itemCount" class="count">0</span></h2></div>
+        <label class="upload-btn">＋ Add media<input id="fileInput" type="file" accept="image/*,video/mp4,video/webm" multiple></label>
+      </div>
+      <div id="uploadProgress" class="progress-wrap hidden"><div id="progressBar"></div></div>
+      <div id="playlist" class="playlist empty">Your playlist will appear here.</div>
+      <div class="footnote">Tip: use optimized MP4 videos and 9:16 artwork for the best LED results.</div>
+    </section>
+    <footer>NMAMIT CONNECT <span>·</span> Built for portrait displays</footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
