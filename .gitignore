@@ -1,0 +1,27 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+.DS_Store
+.env
+.local-secrets/
+
+# Local backups and editor files
+.vscode/
+*.backup
+*.backup-*
+*.before-*
+*.before-*.*
+local.properties
+.env.*
+!.env.example
+
+# Android build output
+.gradle/
+**/build/
+*.apk
+*.aab
+
+# Signing credentials
+*.jks
+*.keystore
