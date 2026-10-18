@@ -36,6 +36,7 @@
     $("dashboard")?.classList.toggle("hidden", !show);
     if (show) {
       ensureDeviceRegistrationUI();
+      ensureMediaManagerUI();
       if (typeof handleIncomingQrUrl === "function") handleIncomingQrUrl();
     }
   }
@@ -59,6 +60,7 @@
 
     displays = data || [];
     renderDisplays();
+    refreshMediaDisplayOptions();
     connected(true);
     say(displays.length
       ? "Displays loaded. Registered displays can be paired with an Android player."
@@ -181,6 +183,138 @@
     }
   }
 
+
+  // Media uploads use short-lived signed Storage URLs. Playlist mutations are
+  // performed by owner-verified Edge Functions, never direct anonymous writes.
+  let mediaItems = [];
+  let mediaBusy = false;
+  function ensureMediaManagerUI() {
+    const dashboard = $("dashboard");
+    if (!dashboard || $("mediaManagerPanel")) return;
+    const panel = document.createElement("section");
+    panel.id = "mediaManagerPanel";
+    panel.className = "panel";
+    panel.style.cssText = "margin:18px 0;padding:20px;border:1px solid var(--border,#333);border-radius:14px;";
+    panel.innerHTML = `
+      <h2 style="margin:0 0 6px">Media & Playlist</h2>
+      <p class="muted">Upload images or videos to an active display. Changes sync to the Android player automatically.</p>
+      <label for="mediaDisplaySelect">Active display</label>
+      <select id="mediaDisplaySelect" style="display:block;width:100%;max-width:520px;padding:12px;margin:8px 0 14px;border-radius:9px;background:var(--surface,#111);color:inherit;border:1px solid var(--border,#444)"></select>
+      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+        <div style="flex:1 1 240px"><label for="mediaFileInput">Image or video file (max 200 MB)</label><input id="mediaFileInput" type="file" accept="image/*,video/*" style="display:block;width:100%;padding:10px;margin-top:8px;box-sizing:border-box"></div>
+        <div style="width:140px"><label for="mediaDurationInput">Image duration (sec)</label><input id="mediaDurationInput" type="number" min="1" max="3600" value="10" style="width:100%;padding:10px;margin-top:8px;box-sizing:border-box"></div>
+        <button type="button" class="primary" id="uploadMediaBtn">Upload & add</button>
+      </div>
+      <p id="mediaHelp" class="muted" role="status" aria-live="polite"></p>
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px"><h3 style="margin:0">Playlist</h3><button type="button" class="secondary" id="refreshMediaBtn">Refresh playlist</button></div>
+      <div id="mediaPlaylist" style="display:grid;gap:10px;margin-top:12px">Choose an active display.</div>`;
+    const displayList = $("displayList");
+    if (displayList?.parentElement) displayList.parentElement.insertBefore(panel, displayList);
+    else dashboard.append(panel);
+    $("mediaDisplaySelect").addEventListener("change", () => loadMediaPlaylist());
+    $("refreshMediaBtn").addEventListener("click", () => loadMediaPlaylist());
+    $("uploadMediaBtn").addEventListener("click", uploadMedia);
+    refreshMediaDisplayOptions();
+  }
+  function mediaMessage(message) { if ($("mediaHelp")) $("mediaHelp").textContent = message; }
+  function selectedMediaDisplay() { return displays.find(d => d.id === $("mediaDisplaySelect")?.value && d.lifecycle_status === "active") || null; }
+  function refreshMediaDisplayOptions() {
+    const select = $("mediaDisplaySelect");
+    if (!select) return;
+    const previous = select.value;
+    select.replaceChildren();
+    const active = displays.filter(d => d.lifecycle_status === "active");
+    if (!active.length) {
+      const option = document.createElement("option"); option.value = ""; option.textContent = "No active displays — pair a display first"; select.append(option);
+      if ($("mediaPlaylist")) $("mediaPlaylist").textContent = "Pair a display to manage its playlist.";
+      return;
+    }
+    active.forEach(d => { const o = document.createElement("option"); o.value = d.id; o.textContent = `${d.name || d.display_code} (${d.display_code || d.id})`; select.append(o); });
+    if (active.some(d => d.id === previous)) select.value = previous;
+    loadMediaPlaylist();
+  }
+  async function playlistRequest(body) {
+    const { data, error } = await sb.functions.invoke("manage-playlist", { body });
+    if (error) {
+      let detail = error.message || "Playlist request failed.";
+      if (error.context?.clone) { try { const r = await error.context.clone().json(); detail = r.error || r.message || detail; } catch (_) {} }
+      throw new Error(detail);
+    }
+    if (!data?.ok) throw new Error(data?.error || "Playlist request failed.");
+    return data;
+  }
+  async function loadMediaPlaylist() {
+    const display = selectedMediaDisplay();
+    const list = $("mediaPlaylist");
+    if (!list || !display || !sb) { if (list) list.textContent = "Choose an active display."; return; }
+    list.textContent = "Loading playlist…";
+    try {
+      const result = await playlistRequest({ action: "list", display_id: display.id });
+      if (selectedMediaDisplay()?.id !== display.id) return;
+      mediaItems = result.items || [];
+      renderMediaPlaylist();
+    } catch (error) { list.textContent = `Could not load playlist: ${errorMessage(error)}`; }
+  }
+  function renderMediaPlaylist() {
+    const list = $("mediaPlaylist"); if (!list) return;
+    list.replaceChildren();
+    if (!mediaItems.length) { list.textContent = "No media yet. Upload an image or video above."; return; }
+    mediaItems.forEach((item, index) => {
+      const row = document.createElement("article");
+      row.style.cssText = "display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px;border:1px solid var(--border,#333);border-radius:12px;";
+      const preview = item.media_type === "video" ? document.createElement("video") : document.createElement("img");
+      preview.src = item.media_url; preview.style.cssText = "width:100px;height:68px;object-fit:cover;border-radius:7px;background:#111";
+      if (item.media_type === "video") { preview.muted = true; preview.playsInline = true; preview.controls = true; }
+      const info = document.createElement("div"); info.style.cssText = "flex:1 1 160px;min-width:0";
+      const title = document.createElement("strong"); title.textContent = item.title || "Untitled media"; title.style.display = "block";
+      const meta = document.createElement("small"); meta.className = "muted"; meta.textContent = `${item.media_type.toUpperCase()} · Position ${index + 1}${item.media_type === "image" ? ` · ${item.duration_seconds}s` : ""}`;
+      info.append(title, meta);
+      const controls = document.createElement("div"); controls.style.cssText = "display:flex;gap:6px;flex-wrap:wrap";
+      const up = document.createElement("button"); up.type = "button"; up.className = "secondary"; up.textContent = "↑"; up.title = "Move up"; up.disabled = index === 0; up.addEventListener("click", () => moveMedia(index, -1));
+      const down = document.createElement("button"); down.type = "button"; down.className = "secondary"; down.textContent = "↓"; down.title = "Move down"; down.disabled = index === mediaItems.length - 1; down.addEventListener("click", () => moveMedia(index, 1));
+      const del = document.createElement("button"); del.type = "button"; del.className = "secondary"; del.textContent = "Remove"; del.addEventListener("click", () => removeMedia(item));
+      controls.append(up, down, del); row.append(preview, info, controls); list.append(row);
+    });
+  }
+  async function moveMedia(index, delta) {
+    const next = index + delta; if (next < 0 || next >= mediaItems.length) return;
+    const copy = [...mediaItems]; [copy[index], copy[next]] = [copy[next], copy[index]];
+    try { await playlistRequest({ action: "reorder", display_id: selectedMediaDisplay()?.id, item_ids: copy.map(x => x.id) }); await loadMediaPlaylist(); mediaMessage("Playlist order updated."); }
+    catch (error) { mediaMessage(`Could not reorder playlist: ${errorMessage(error)}`); }
+  }
+  async function removeMedia(item) {
+    const display = selectedMediaDisplay(); if (!display || !confirm(`Remove “${item.title}” from this playlist?`)) return;
+    try { await playlistRequest({ action: "delete", display_id: display.id, item_id: item.id }); await loadMediaPlaylist(); mediaMessage("Media removed."); }
+    catch (error) { mediaMessage(`Could not remove media: ${errorMessage(error)}`); }
+  }
+  async function uploadMedia() {
+    if (mediaBusy) return;
+    const display = selectedMediaDisplay(), file = $("mediaFileInput")?.files?.[0];
+    if (!display) return mediaMessage("Select an active display first.");
+    if (!file) return mediaMessage("Choose an image or video file first.");
+    if (file.size <= 0 || file.size > 200 * 1024 * 1024) return mediaMessage("File must be smaller than 200 MB.");
+    if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) return mediaMessage("Only image and video files are supported.");
+    mediaBusy = true; $("uploadMediaBtn").disabled = true; mediaMessage("Preparing secure upload…");
+    try {
+      const { data: signed, error } = await sb.functions.invoke("create-media-upload-url", { body: { display_id: display.id, filename: file.name, content_type: file.type, size: file.size } });
+      if (error) {
+        let detail = error.message || "Could not prepare upload.";
+        if (error.context?.clone) { try { const r = await error.context.clone().json(); detail = r.error || r.message || detail; } catch (_) {} }
+        throw new Error(detail);
+      }
+      if (!signed?.ok || !signed.path || !signed.token) throw new Error(signed?.error || "Upload URL was not returned.");
+      mediaMessage("Uploading file… keep this page open.");
+      const { error: uploadError } = await sb.storage.from("signage-media").uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type, upsert: false });
+      if (uploadError) throw uploadError;
+      const mediaUrl = sb.storage.from("signage-media").getPublicUrl(signed.path).data.publicUrl;
+      const mediaType = file.type.startsWith("video/") ? "video" : "image";
+      const duration = Math.max(1, Math.min(3600, Number.parseInt($("mediaDurationInput").value || "10", 10) || 10));
+      await playlistRequest({ action: "add", display_id: display.id, title: file.name.replace(/\.[^.]+$/, ""), media_url: mediaUrl, media_type: mediaType, duration_seconds: duration, storage_path: signed.path });
+      $("mediaFileInput").value = ""; mediaMessage("Upload complete. The Android display will sync shortly."); await loadMediaPlaylist();
+    } catch (error) { mediaMessage(`Upload failed: ${errorMessage(error)}. If the storage bucket is missing, create the existing signage-media bucket in Supabase Storage; no database schema change is needed.`); }
+    finally { mediaBusy = false; $("uploadMediaBtn").disabled = false; }
+  }
+
   // Retiring a display is performed by a protected Edge Function, not by
   // a direct browser-side UPDATE against the displays table.
   async function retireDisplay(display) {
@@ -253,11 +387,13 @@
       <form id="manualDeviceCodeForm" style="display:grid;gap:10px;margin-top:14px">
         <label for="manualNmcCode">NMC display code</label>
         <input id="manualNmcCode" name="display_code" placeholder="NMC-XXXXXXXXXX" autocomplete="off" autocapitalize="characters" maxlength="14" required style="padding:12px;border-radius:9px;width:100%;box-sizing:border-box">
+        <label for="pairingCodeInput">Six-digit code shown on the Android display</label>
+        <input id="pairingCodeInput" name="pairing_code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" autocomplete="one-time-code" required style="padding:12px;border-radius:9px;width:100%;box-sizing:border-box">
         <label for="claimDisplayName">Display name (optional)</label>
         <input id="claimDisplayName" name="name" placeholder="e.g. Main Auditorium LED" autocomplete="off" style="padding:12px;border-radius:9px;width:100%;box-sizing:border-box">
         <label for="claimDisplayLocation">Location (optional)</label>
         <input id="claimDisplayLocation" name="location_label" placeholder="e.g. NMAMIT Auditorium" autocomplete="off" style="padding:12px;border-radius:9px;width:100%;box-sizing:border-box">
-        <button type="submit" class="primary" id="claimManualCodeBtn">Find display &amp; generate pairing code</button>
+        <button type="submit" class="primary" id="claimManualCodeBtn">Pair display</button>
       </form>
       <p id="deviceRegistrationHelp" class="muted" role="status" aria-live="polite" style="margin-bottom:0"></p>`;
     const displayList = $("displayList");
@@ -274,18 +410,7 @@
         registrationMessage("Enter the full NMC code shown on the Android player (example: NMC-AC8527AD59).");
         return;
       }
-      // An NMC code identifies an existing display; it is not an Android credential.
-      // Find the existing record and use the established pairing-session flow.
-      const existing = displays.find(item => String(item.display_code || "").toUpperCase() === display_code);
-      if (!existing) {
-        registrationMessage("This NMC code is not in the display list for the signed-in account. Refresh the list or register the display through the authorized setup flow first.");
-        return;
-      }
-      if (["retired", "revoked"].includes(existing.lifecycle_status)) {
-        registrationMessage(`This display is ${existing.lifecycle_status} and cannot be paired.`);
-        return;
-      }
-      await createPairing(existing);
+      await claimDevice({ display_code, code: $("pairingCodeInput").value.trim(), name: $("claimDisplayName").value.trim(), location_label: $("claimDisplayLocation").value.trim() });
     });
   }
   let qrStream = null;
@@ -326,8 +451,8 @@
               const parsed = parseDeviceQr(results[0].rawValue);
               if (parsed) {
                 stopQrScanner(); $("manualNmcCode").value = parsed.display_code;
-                if (parsed.code) await claimDevice({ ...parsed, name: $("claimDisplayName").value.trim(), location_label: $("claimDisplayLocation").value.trim() });
-                else registrationMessage("QR recognized. Display code filled in. Press Find display & generate pairing code to continue.");
+                if (parsed.code && $("pairingCodeInput")) $("pairingCodeInput").value = parsed.code;
+                registrationMessage("QR recognized. Enter the six-digit code shown on the Android screen, then tap Pair display.");
                 return;
               }
             }
@@ -360,44 +485,34 @@
   }
   async function claimDevice({ display_code, code = "", name = "", location_label = "" }) {
     if (!sb) return;
-
     const button = $("claimManualCodeBtn");
-    if (!code.trim()) {
-      registrationMessage(
-        "A device code alone cannot activate a display. Scan the full, current QR shown on the Android player."
-      );
-      return;
-    }
-
-    if (!/^NMC-[A-Z0-9]{10}$/.test(display_code || "")) {
-      registrationMessage("Invalid display code. Scan the QR shown on the Android player.");
-      return;
-    }
-
-    if (!/^\d{6}$/.test(code.trim())) {
-      registrationMessage("The pairing code must contain six digits. Scan the latest QR shown on the Android player.");
-      return;
-    }
-
     if (button) button.disabled = true;
-    registrationMessage(`Claiming ${display_code}…`);
-
+    const pairingCode = String(code || "").trim();
+    if (!/^\d{6}$/.test(pairingCode)) {
+      registrationMessage("Enter the six-digit code currently shown on the Android display.");
+      if (button) button.disabled = false;
+      return;
+    }
+    registrationMessage(`Pairing ${display_code}…`);
     try {
-      const data = await invokeRegistrationFunction("claim-display", {
+      // The Android player creates the temporary pairing session. The admin
+      // only redeems the code displayed by that device; do not create a second
+      // code in the controller.
+      const claimed = await invokeRegistrationFunction("claim-display", {
         display_code,
-        qr_code: code.trim(),
-        name: name.trim() || `Display ${display_code}`,
-        location_label: location_label.trim()
+        qr_code: pairingCode,
+        name: name || `Display ${display_code}`,
+        location_label
       });
-
-      const message = data.message || "Display claim accepted.";
-      registrationMessage(`${message} Refreshing displays…`);
+      registrationMessage(`${claimed.message || "Pairing accepted."} Refreshing display status…`);
       await loadDisplays();
-
-      if ($("manualDeviceCodeForm")) $("manualDeviceCodeForm").reset();
-      registrationMessage(`${message} Check the display list for its current status.`);
+      registrationMessage("Pairing request accepted. The Android player should authenticate and become ACTIVE shortly.");
     } catch (error) {
-      registrationMessage(`Could not claim display: ${errorMessage(error)}. Scan the latest QR and try again.`);
+      const message = errorMessage(error, "Pairing failed.");
+      registrationMessage(`Pairing failed: ${message}`);
+      if (/retired/i.test(message)) {
+        registrationMessage("This display identity is retired. Keep the database record; the Android player must generate a fresh registration identity.");
+      }
     } finally {
       if (button) button.disabled = false;
     }
@@ -488,18 +603,10 @@
     const apply = () => {
       ensureDeviceRegistrationUI();
       if ($("manualNmcCode")) $("manualNmcCode").value = display_code;
-      if (code) {
-        claimDevice({
-          display_code,
-          code,
-          name: $("claimDisplayName")?.value.trim() || "",
-          location_label: $("claimDisplayLocation")?.value.trim() || ""
-        });
-      } else {
-        registrationMessage(
-          "This QR contains only the device code, not a temporary pairing code. Update the Android player to show the full pairing QR."
-        );
-      }
+      if (code && $("pairingCodeInput")) $("pairingCodeInput").value = code;
+      registrationMessage(code
+        ? "Android QR recognized. Verify the six-digit code shown on the display, then tap Pair display."
+        : "Android QR recognized. Enter the six-digit code shown on the display, then tap Pair display.");
     };
     if (sb && $("deviceRegistrationPanel")) apply();
     else window.addEventListener("nmamit-controller-ready", apply, { once: true });
