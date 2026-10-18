@@ -237,7 +237,7 @@
     const { data, error } = await sb.functions.invoke("manage-playlist", { body });
     if (error) {
       let detail = error.message || "Playlist request failed.";
-      if (error.context?.clone) { try { const r = await error.context.clone().json(); detail = r.error || r.message || detail; } catch (_) {} }
+      if (error.context?.clone) { try { const r = await error.context.clone().json(); detail = [r.error || r.message, r.details].filter(Boolean).join(": ") || detail; } catch (_) {} }
       throw new Error(detail);
     }
     if (!data?.ok) throw new Error(data?.error || "Playlist request failed.");
